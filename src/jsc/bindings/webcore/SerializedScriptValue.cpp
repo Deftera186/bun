@@ -1594,10 +1594,9 @@ private:
         VM& vm = m_lexicalGlobalObject->vm();
         auto scope = DECLARE_THROW_SCOPE(vm);
 
-        // worker_threads markAsUncloneable: reject a marked object anywhere in the
-        // graph (root, array element, or object property), excluding ArrayBuffers/
-        // views which are serialized natively. Checked here (not just at the root)
-        // because nested terminals are dumped via dumpIfTerminal directly.
+        // markAsUncloneable: reject a marked object anywhere in the graph, not just the
+        // root (nested terminals go through dumpIfTerminal directly). ArrayBuffers/views
+        // are excluded: they serialize natively.
         if (value.isObject()) {
             JSObject* obj = asObject(value);
             if (!obj->inherits<JSArrayBuffer>() && !obj->inherits<JSArrayBufferView>()
@@ -1709,19 +1708,16 @@ private:
                 auto errorTypeString = errorTypeValue.toWTFString(m_lexicalGlobalObject);
                 RETURN_IF_EXCEPTION(scope, false);
 
-                // Read error fields with get() under one catch scope. Some
-                // (stack, and line/column/sourceURL when derived from it) are
-                // lazily materialized via Error.prepareStackTrace, which can throw;
-                // a throwing getter must drop that field rather than asserting in
-                // getOwnPropertyDescriptor / aborting serialization (node drops the
-                // stack to undefined in that case).
+                // Read error fields under one catch scope: stack (and line/column/sourceURL
+                // derived from it) may be materialized via Error.prepareStackTrace, and a
+                // throwing getter must drop the field, not abort serialization (node drops
+                // the stack to undefined).
                 String message, sourceURL, stack;
                 unsigned line = 0, column = 0;
                 {
                     auto fieldScope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
-                    // Each reader clears a throwing getter's exception; tryClearException
-                    // returns false only for a TerminationException it cannot clear, in
-                    // which case propagate it instead of serializing a bogus record.
+                    // Clear a throwing getter's exception; only an unclearable
+                    // TerminationException is propagated instead of serializing a bogus record.
                     const auto readString = [&](const JSC::Identifier& name, String& out) -> bool {
                         JSValue v = errorInstance->get(m_lexicalGlobalObject, name);
                         if (!fieldScope.exception() && v.isString())

@@ -127,10 +127,8 @@ public:
 
     bool isWorker = false;
 
-    // Set once when the context is permanently shutting down
-    // (WebWorker__teardownJSCVM). Distinct from VM::hasTerminationRequest(),
-    // which node:vm's {timeout}/{breakOnSigint} also set *transiently* on a
-    // long-lived VM that keeps running afterward.
+    // Set once when the context is permanently shutting down (WebWorker__teardownJSCVM).
+    // Unlike VM::hasTerminationRequest(), never set transiently (node:vm {timeout}).
     void markTerminating() { m_isTerminating.store(true, std::memory_order_release); }
     bool isTerminating() const { return m_isTerminating.load(std::memory_order_acquire); }
 

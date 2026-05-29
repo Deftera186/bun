@@ -357,21 +357,15 @@ JSC_DEFINE_HOST_FUNCTION(jsEditWindowsEnvVar, (JSGlobalObject * global, JSC::Cal
 // ============================================================================
 // worker_threads SHARE_ENV
 //
-// When a Worker is created with `env: SHARE_ENV`, the parent and the worker
-// share a single, process-wide, live view of the environment. Each thread has
-// its own JSGlobalObject (and JS objects cannot be shared across VMs), so both
-// sides get their own `process.env` object — but those objects are thin
-// write-through views over the one store below. Access is serialized by a lock,
-// and strings are isolatedCopy()'d on the way in and out so they can safely
-// cross threads.
+// With `env: SHARE_ENV` the parent and worker share one live environment. JS
+// objects can't cross VMs, so each thread gets its own `process.env` object that
+// is a thin write-through view over the process-wide store below (lock-guarded,
+// strings isolatedCopy()'d both ways).
 //
-// Scope note: this affects only the JS-visible `process.env`. Bun's Zig-side
-// env map (read by `Bun.env`, fetch proxy resolution, etc.) is still
-// snapshotted per worker, so those may diverge from `process.env` under
-// SHARE_ENV. The Node test this targets only exercises `process.env`.
-// On Windows env var names are case-insensitive; normalize shared-store keys
-// to uppercase so a swapped process.env matches the regular env object (which
-// also uppercases under OS(WINDOWS)).
+// Only the JS-visible `process.env` is shared; Bun's Zig-side env map (Bun.env,
+// fetch proxy resolution) is still snapshotted per worker.
+// Windows env keys are case-insensitive; normalize shared-store keys to uppercase
+// to match the regular env object's OS(WINDOWS) behavior.
 static ALWAYS_INLINE String normalizeSharedEnvKey(const String& key)
 {
 #if OS(WINDOWS)
@@ -425,9 +419,8 @@ private:
     HashMap<String, String> m_map;
 };
 
-// A `process.env` object whose reads, writes, deletes and enumeration go
-// through the process-wide SharedEnvStore. It holds no instance state — all
-// state lives in the singleton store — so it needs no custom subspace.
+// process.env variant whose reads/writes/deletes/enumeration go through the
+// process-wide SharedEnvStore; no instance state, so no custom subspace.
 class JSSharedEnvMap final : public JSC::JSNonFinalObject {
 public:
     using Base = JSC::JSNonFinalObject;
@@ -497,15 +490,9 @@ bool JSSharedEnvMap::getOwnPropertySlot(JSObject* object, JSGlobalObject* global
     return true;
 }
 
-// Mirror the side effects of the regular process.env CustomSetters for keys
-// whose writes drive native state. SharedEnvStore only updates the shared
-// string map; it does not touch the native TZ/TLS/verbose caches or the Zig
-// env map that fetch()'s proxy resolution reads, so without this a worker that
-// swapped process.env to the shared store would silently drop those effects.
-// Proxy-related env vars whose value must be written back to the Zig env map so
-// fetch()'s getHttpProxyFor() observes runtime changes. Shared by the SHARE_ENV
-// write-through path (applySharedEnvSideEffects) and the snapshot builder
-// (createEnvironmentVariablesMap).
+// Proxy env vars written back to the Zig env map so fetch()'s getHttpProxyFor()
+// sees runtime changes; shared by applySharedEnvSideEffects and
+// createEnvironmentVariablesMap.
 static constexpr ASCIILiteral kProxyEnvVarNames[] = {
     "HTTP_PROXY"_s,
     "http_proxy"_s,
@@ -515,6 +502,9 @@ static constexpr ASCIILiteral kProxyEnvVarNames[] = {
     "no_proxy"_s,
 };
 
+// Mirror the regular process.env CustomSetters' native side effects (TZ, TLS,
+// verbose-fetch, proxy vars); the shared store only updates strings, so without
+// this a SHARE_ENV worker's writes would silently skip them.
 static void applySharedEnvSideEffects(JSGlobalObject* globalObject, const String& rawKey, const String& stringValue)
 {
     VM& vm = JSC::getVM(globalObject);
@@ -631,12 +621,9 @@ void enableSharedEnvForWorker(Zig::GlobalObject* globalObject)
     if (envObject->inherits<JSSharedEnvMap>())
         return;
 
-    // Merge this global's current process.env into the shared store (the first
-    // participating global establishes the values; later joiners only add keys
-    // not already present so they don't clobber the shared state), then swap
-    // THIS global's process.env to the shared variant. The swap is per-global
-    // (a process-wide "seeded" flag must not skip swapping a later global, or
-    // its writes would be invisible to the others).
+    // Merge this global's process.env into the shared store (later joiners only add
+    // missing keys), then swap this global's process.env to the shared variant. The
+    // swap must happen per-global, even when the store is already seeded.
     {
         if (!envObject->staticPropertiesReified()) {
             envObject->reifyAllStaticProperties(globalObject);
@@ -663,9 +650,8 @@ void enableSharedEnvForWorker(Zig::GlobalObject* globalObject)
     auto* shared = createSharedEnvironmentVariablesMap(globalObject).getObject();
     globalObject->m_processEnvObject.set(vm, globalObject, shared);
 
-    // `process.env` is exposed as a cached lazy property on the process object;
-    // once accessed it becomes an own data property holding the previous object.
-    // Overwrite it so `process.env` resolves to the shared variant.
+    // process.env may already be reified as an own property on the process object;
+    // overwrite it so it resolves to the shared variant.
     if (globalObject->hasProcessObject()) {
         JSObject* processObject = globalObject->processObject();
         processObject->putDirect(vm, JSC::Identifier::fromString(vm, "env"_s), shared, 0);

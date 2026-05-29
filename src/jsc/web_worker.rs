@@ -1130,15 +1130,13 @@ impl WebWorker {
                     true,
                 );
                 if !handled {
-                    // exit_code is already 1 from uncaught_exception on the
-                    // !handled path; don't re-set it here or we clobber a
-                    // process.on('exit') handler that changed process.exitCode.
+                    // exit_code is already 1 from uncaught_exception; re-setting it here
+                    // would clobber a process.on('exit') change to process.exitCode.
                     return self.shutdown();
                 }
             } else if status == jsc::js_promise::Status::Pending {
-                // Unsettled top-level await: the event loop drained while the
-                // entry module's evaluation promise was still pending. Node
-                // exits the worker with code 13 in this case.
+                // Unsettled top-level await (loop drained, entry promise still pending):
+                // node exits the worker with code 13.
                 if !self.exit_called.load(Ordering::Relaxed) {
                     vm.as_mut().exit_handler.exit_code = 13;
                 }
@@ -1486,11 +1484,9 @@ fn on_unhandled_rejection(
         .to_error()
         .unwrap_or(error_instance_or_exception);
 
-    // A worker whose entry point (or a dynamic import) fails to parse rejects
-    // with a BuildMessage, which is not an Error and does not survive structured
-    // clone (the parent would otherwise get a generic Error). Node surfaces a
-    // module compile failure as a SyntaxError; build a real one carrying the
-    // formatted parse-error text so it serializes with its subtype intact.
+    // A parse failure rejects with a BuildMessage, which doesn't survive structured
+    // clone. Node reports a SyntaxError; build a real one from the formatted parse
+    // error so the subtype reaches the parent intact.
     if let Some(bm) = error_instance.as_::<crate::BuildMessage>() {
         // SAFETY: as_ returned a live BuildMessage cell, read-only on the
         // worker (JS) thread that owns it.
@@ -1557,13 +1553,10 @@ fn on_unhandled_rejection(
     {
         let _ = global_object.try_take_exception();
     }
-    // node runs a worker's process 'exit' handlers on an uncaught exception
-    // (with code 1; they may change process.exitCode). Run them here, BEFORE
-    // arming termination below: arming leaves a pending termination exception
-    // that makes dispatchExitInternal skip 'exit' (which is exactly how a parent
-    // terminate() correctly skips them). The reported exception was already
-    // cleared above, and dispatchExitInternal's static processIsExiting guard
-    // stops shutdown() from running them a second time.
+    // node runs the worker's process 'exit' handlers on an uncaught exception (code 1;
+    // they may change process.exitCode). Run them before arming termination — a pending
+    // termination exception makes dispatchExitInternal skip 'exit' (as terminate() should),
+    // and its processIsExiting guard stops shutdown() from running them twice.
     virtual_machine::ExitHandler::dispatch_on_exit(vm);
     let _ = worker.set_requested_terminate();
     // PORT NOTE: Zig calls `worker.shutdown()` here, which is `noreturn`

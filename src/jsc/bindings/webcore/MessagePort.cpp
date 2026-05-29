@@ -57,11 +57,9 @@ MessagePort::MessagePort(ScriptExecutionContext& context, Ref<MessagePortPipe>&&
 {
     // The WeakPtrFactory must be initialized on the owning thread.
     initializeWeakPtrFactory();
-    // Every port (local MessageChannel ends included, not just transferred
-    // ones) refs the event loop while it has a 'message' listener, matching
-    // Node: a listening port keeps its thread alive until closed or unref'd.
-    // Without this a buffered message can be lost when its (late) listener is
-    // added after the loop would otherwise have drained.
+    // Any port with a 'message' listener refs the event loop (matching node: a
+    // listening port keeps its thread alive until closed or unref'd); otherwise a
+    // buffered message could be lost if its listener is added late.
     onDidChangeListener = &MessagePort::onDidChangeListenerImpl;
 }
 
@@ -77,9 +75,8 @@ ExceptionOr<void> MessagePort::postMessage(JSC::JSGlobalObject& state, JSC::JSVa
     // simulated throw on asan/debug that must be consumed before any nested scope.
     auto& vm = state.vm();
     auto warnScope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
-    // Reject an already-detached MessagePort in the transfer list before
-    // serialization, so a bad port aborts the post before any ArrayBuffer in
-    // the same transfer list is detached (transfer is atomic), matching Node.
+    // Reject a detached port in the transfer list before serialization, so the post
+    // aborts before any ArrayBuffer in the list is detached (transfer is atomic).
     for (auto& transferable : options.transfer) {
         if (auto* jsPort = dynamicDowncast<JSMessagePort>(transferable.get())) {
             if (jsPort->wrapped().isDetached())
@@ -114,20 +111,17 @@ ExceptionOr<void> MessagePort::postMessage(JSC::JSGlobalObject& state, JSC::JSVa
                 targetsEntangledPeer = true;
             }
         }
-        // Detach every transfer-list port up front -- transfer is atomic in node,
-        // so a third-party port in the same list must not stay usable in the
-        // sender even when the message itself is dropped below.
+        // Detach every transfer-list port up front: transfer is atomic in node, so a
+        // third-party port must not stay usable even when the message is dropped below.
         auto disentangled = MessagePort::disentanglePorts(WTF::move(ports));
         if (disentangled.hasException())
             return disentangled.releaseException();
         transferredPorts = disentangled.releaseReturnValue();
 
         if (targetsEntangledPeer) {
-            // node: posting the source port's own entangled peer targets the
-            // message at itself; node warns and loses the channel rather than
-            // throwing. ArrayBuffers and ports in the transfer were already
-            // detached above; drop the message and close so the dead channel
-            // stops keeping the loop alive.
+            // Posting the port's own entangled peer: node warns and loses the channel
+            // rather than throwing. Transferables were already detached above; drop the
+            // message and close so the dead channel stops reffing the loop.
             Bun__Process__emitWarning(defaultGlobalObject(&state),
                 JSC::JSValue::encode(JSC::jsString(vm, String("The target port was posted to itself, and the communication channel was lost"_s))),
                 JSC::JSValue::encode(JSC::jsString(vm, String("Warning"_s))),
@@ -162,9 +156,8 @@ void MessagePort::flushQueuedMessagesBeforeClose()
     if (!context || !context->globalObject())
         return;
     auto* globalObject = defaultGlobalObject(context->globalObject());
-    // Only deliver while JS can run. During context teardown the queue is left
-    // for m_pipe->close() to drop (it unwinds nested transferred-port chains
-    // iteratively to avoid a native stack overflow).
+    // Only deliver while JS can run; during teardown the queue is left for
+    // m_pipe->close() to drop (it unwinds nested port chains iteratively).
     if (Zig::GlobalObject::scriptExecutionStatus(globalObject, globalObject) != ScriptExecutionStatus::Running)
         return;
 
@@ -187,16 +180,13 @@ void MessagePort::close()
         return;
     m_isClosing = true;
 
-    // Deliver messages already queued before close() so they are not dropped
-    // (node defers the underlying handle teardown, so an in-flight drain
-    // finishes the queue). A reentrant close() from one of these handlers is
-    // short-circuited by m_isClosing; messages arriving after close() are
-    // rejected by the pipe's Closed check in send().
+    // Deliver messages queued before close() (node defers handle teardown, so an
+    // in-flight drain finishes). Reentrant close() is short-circuited by m_isClosing;
+    // later sends are rejected by the pipe's Closed check.
     flushQueuedMessagesBeforeClose();
 
-    // Fire 'close' after queued messages are delivered and before teardown,
-    // so listeners see it post-flush. Guarded against a double dispatch when
-    // the peer already closed.
+    // Fire 'close' after the queued messages and before teardown; guarded against a
+    // double dispatch when the peer already closed.
     dispatchCloseEvent();
 
     m_isDetached = true;
@@ -221,10 +211,8 @@ void MessagePort::close()
         deref();
     }
 
-    // close() can run without a preceding jsUnref() (e.g. the targetsEntangledPeer
-    // warn-and-close path, or contextDestroyed()). Clear the message-listener
-    // keepalive too so a later listener add can't re-acquire a loop-ref that
-    // nothing will release.
+    // close() can run without a prior jsUnref() (warn-and-close, contextDestroyed());
+    // clear the listener keepalive so a later listener add can't re-ref the loop.
     if (m_isRefd) {
         m_isRefd = false;
         updateListenerEventLoopRef();
@@ -252,15 +240,11 @@ void MessagePort::peerClosed()
     if (!context || !context->globalObject())
         return;
     Ref protectedThis { *this };
-    // The entangled peer closed: no further messages can arrive. Notify
-    // listeners with a 'close' event (guarded so an explicit close() on this
-    // side doesn't fire it twice) and release the event-loop ref held by
-    // jsRef()/onmessage so the loop can idle. Matches node's MessagePort.
+    // Peer closed: no more messages can arrive. Fire 'close' (guarded against a double
+    // dispatch) and release this side's loop refs so the loop can idle, matching node.
     dispatchCloseEvent();
-    // Release any event-loop ref this port holds. jsUnref() internally clears
-    // both the message-listener loop-ref (m_isRefd) and the onmessage/ref()
-    // keepalive (m_hasRef), so a transferred port that only had a 'message'
-    // listener (no .onmessage/.ref()) no longer pins the loop after the peer closes.
+    // jsUnref() clears both the listener loop-ref (m_isRefd) and the onmessage/ref()
+    // keepalive (m_hasRef), so a listening transferred port stops pinning the loop.
     auto* globalObject = defaultGlobalObject(context->globalObject());
     jsUnref(globalObject);
 }
@@ -287,9 +271,8 @@ TransferredMessagePort MessagePort::disentangle()
         deref();
     }
 
-    // A transferred port is inert; clear the message-listener keepalive too so
-    // hasRef() reports false, matching Node's HandleWrap::HasRef() gating on
-    // IsAlive() (the disentangle analogue of the close() reset above).
+    // A transferred port is inert; clear the listener keepalive too so hasRef()
+    // reports false (the disentangle analogue of the close() reset above).
     if (m_isRefd) {
         m_isRefd = false;
         updateListenerEventLoopRef();
@@ -421,9 +404,8 @@ Vector<RefPtr<MessagePort>> MessagePort::entanglePorts(ScriptExecutionContext& c
     });
 }
 
-// Holds/releases an event-loop ref for the message-listener mechanism so the ref
-// matches (m_isRefd && m_messageEventCount > 0). This lets .unref() release the
-// loop-ref taken when a 'message' listener was added, and .ref() re-acquire it.
+// Reconcile the message-listener loop-ref with (m_isRefd && m_messageEventCount > 0),
+// so .unref() releases the listener ref and .ref() re-acquires it.
 void MessagePort::updateListenerEventLoopRef()
 {
     bool shouldHold = m_isRefd && m_messageEventCount > 0;
@@ -465,9 +447,8 @@ bool MessagePort::addEventListener(const AtomString& eventType, Ref<EventListene
     if (eventType == eventNames().messageEvent) {
         start();
         m_hasMessageEventListener = true;
-        // start() no-ops after the first call; re-attach so a 'message' listener
-        // re-added after a pause (all listeners removed) re-schedules the drain
-        // for messages buffered in the meantime.
+        // start() no-ops after the first call; re-attach so a listener re-added after a
+        // pause re-schedules the drain for messages buffered meanwhile.
         if (m_started && isEntangled()) {
             if (auto* context = scriptExecutionContext())
                 m_pipe->attach(m_side, context->identifier(), ThreadSafeWeakPtr<MessagePort> { *this });
@@ -518,9 +499,8 @@ void MessagePort::jsRef(JSGlobalObject* lexicalGlobalObject)
 
 void MessagePort::jsUnref(JSGlobalObject* lexicalGlobalObject)
 {
-    // Release the message-listener loop-ref (if held) in addition to the .onmessage=/.ref()
-    // keepalive; without this a transferred port that always listens (a postMessageToThread
-    // control port) would pin the event loop forever.
+    // Also release the listener loop-ref; otherwise an always-listening transferred
+    // port (a postMessageToThread control port) would pin the event loop forever.
     if (m_isRefd) {
         m_isRefd = false;
         updateListenerEventLoopRef();

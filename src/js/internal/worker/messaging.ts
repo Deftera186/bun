@@ -1,22 +1,13 @@
-// Implements worker_threads.postMessageToThread (Node 22+).
+// worker_threads.postMessageToThread (Node 22+), ported from node's
+// lib/internal/worker/messaging.js. The main thread is the hub: every thread keeps a
+// control MessagePort to it, and it routes each message to the destination's port.
+// Delivery results are reported back through a SharedArrayBuffer + Atomics.
 //
-// Ported from Node.js lib/internal/worker/messaging.js. The main thread acts as a
-// hub: every other thread keeps a control MessagePort to the main thread, and the
-// main thread keeps a map of threadId -> port for all threads. A message destined
-// for thread N is routed through the main thread to N's control port. The result of
-// the delivery (delivered / no-listeners / listener-threw / timed-out) is reported
-// back to the caller through a SharedArrayBuffer + Atomics, so the async caller can
-// resolve/reject without an extra round-trip message.
-//
-// Differences from Node:
-//   - Thread info comes from `initThreadInfo` (called from worker_threads.ts) instead
-//     of an internalBinding, because Bun assigns the threadId differently.
-//   - Node's `createMainThreadPort` is split into `createMessagingChannel` (called
-//     before `new Worker`) and `registerMainThreadPort` (called after, once Bun has
-//     assigned the child's threadId).
-//   - Bun's `process.emit` returns true even with no listeners and routes a throwing
-//     listener to uncaughtException instead of propagating it, so the `workerMessage`
-//     listeners are invoked directly (see receiveMessageFromWorker) rather than via emit.
+// Differences from node: thread info comes from initThreadInfo (Bun assigns threadId
+// differently); createMainThreadPort is split into createMessagingChannel (before
+// `new Worker`) + registerMainThreadPort (after the threadId exists); and the
+// `workerMessage` listeners are invoked directly because Bun's process.emit cannot
+// report no-listeners or a throwing listener (see receiveMessageFromWorker).
 
 const { validateNumber } = require("internal/validators");
 
@@ -116,9 +107,7 @@ function sendMessageToWorker(source, destination, value, transferList, memory) {
     {
       type: messageTypes.RECEIVE_MESSAGE_FROM_WORKER,
       source,
-      // destination is intentionally omitted: the receiver routes by port, not
-      // by re-reading it, so it would be clone-serialized on every message for
-      // nothing.
+      // destination omitted: the receiver routes by port and never reads it.
       value,
       memory,
     },
@@ -129,14 +118,9 @@ function sendMessageToWorker(source, destination, value, transferList, memory) {
 function receiveMessageFromWorker(source, value, memory) {
   let response = WORKER_MESSAGING_RESULT_NO_LISTENERS;
 
-  // We can't use process.emit("workerMessage", ...) here for two reasons specific to Bun:
-  //   1. process.emit returns true even when there are no listeners, so its return value
-  //      can't be used to detect the NO_LISTENERS case.
-  //   2. When a listener throws, Bun's process.emit routes the error to the worker's
-  //      uncaughtException handler instead of propagating it synchronously, so a try/catch
-  //      around process.emit would never see it.
-  // Invoking the listeners directly avoids both: NO_LISTENERS is the empty-array case, and a
-  // throwing listener propagates synchronously so we can map it to LISTENER_ERROR.
+  // Don't use process.emit("workerMessage", ...): Bun's emit returns true even with no
+  // listeners (can't detect NO_LISTENERS) and routes a throwing listener to
+  // uncaughtException (can't map it to LISTENER_ERROR). Invoke the listeners directly.
   const listeners = process.listeners("workerMessage");
   if (listeners.length > 0) {
     try {
@@ -179,9 +163,8 @@ function registerMainThreadPort(threadId: number, portToMain: any) {
   } else if (mainThreadPort) {
     mainThreadPort.postMessage(registrationMessage, [portToMain]);
   }
-  // Otherwise this thread is not connected to the main-thread hub (e.g. it was created
-  // via the raw Web Worker API rather than worker_threads.Worker). The child is still
-  // created fine; it just won't be reachable through postMessageToThread.
+  // Not connected to the main-thread hub (e.g. a raw Web Worker): the child still works,
+  // it's just unreachable via postMessageToThread.
 }
 
 function destroyMainThreadPort(threadId: number) {

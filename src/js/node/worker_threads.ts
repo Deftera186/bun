@@ -15,9 +15,7 @@ const {
   validateBoolean,
 } = require("internal/validators");
 
-// Mirror node's lib/internal/worker.js name handling: default "WorkerThread",
-// validate + trim when a name is provided.
-// https://github.com/nodejs/node/blob/main/lib/internal/worker.js
+// node's name handling (lib/internal/worker.js): default "WorkerThread", validate + trim when provided.
 function normalizeWorkerName(rawName) {
   // node gates on `!== undefined`, not truthiness: {name: 0|null|false} must
   // throw ERR_INVALID_ARG_TYPE (via validateString) and {name: ""} stays "".
@@ -30,10 +28,8 @@ function normalizeWorkerName(rawName) {
 
 const { isAbsolute: pathIsAbsolute } = require("node:path");
 
-// Mirror node's lib/internal/worker.js filename validation for non-eval
-// Workers: accept absolute paths, "./"/"../"-relative paths, and file: URL
-// objects; reject bare relative specifiers and string URLs.
-// https://github.com/nodejs/node/blob/main/lib/internal/worker.js
+// node's filename validation for non-eval workers: absolute or "./"/"../"-relative
+// paths and file: URL objects; bare specifiers and string URLs are rejected.
 function validateWorkerFilename(filename) {
   if (filename instanceof URL) {
     if (filename.protocol === "data:") return `${filename}`;
@@ -179,18 +175,16 @@ function injectFakeEmitter(Class) {
         this.dispatchEvent(new (EventClass(event))(event, ...args));
         break;
       default:
-        // node: a non-standard event emitted on a port surfaces to
-        // addEventListener listeners as a CustomEvent (detail = first arg) and
-        // to .on() listeners as the raw argument.
+        // Non-standard events surface as CustomEvent (detail = first arg) to
+        // addEventListener and as the raw argument to .on(), matching node.
         this.dispatchEvent(new CustomEvent(event, { detail: args[0] }));
         break;
     }
     return this;
   }
 
-  // node exposes these via EventEmitter.prototype (inherited), not as own
-  // properties of MessagePort.prototype. Insert an intermediate prototype so
-  // Object.getOwnPropertyNames(MessagePort.prototype) matches node.
+  // node inherits these from EventEmitter.prototype; use an intermediate prototype
+  // so Object.getOwnPropertyNames(MessagePort.prototype) matches node.
   const proto = Class.prototype;
   const inherited = Object.create(Object.getPrototypeOf(proto));
   // node aliases: prepend* and addListener/removeListener map onto on/once/off.
@@ -215,11 +209,8 @@ injectFakeEmitter(_MessagePort);
 
 const MessagePort = _MessagePort;
 
-// node: MessagePort.prototype.close(cb) registers cb as a one-time "close"
-// listener, then performs the native close.
-// https://github.com/nodejs/node/blob/main/lib/internal/worker/io.js
-// Tracks ports closed via JS close() so moveMessagePortToContext can report
-// ERR_CLOSED_MESSAGE_PORT for them, matching node.
+// node's close(cb) registers cb as a one-time "close" listener before the native close.
+// closedMessagePorts lets moveMessagePortToContext report ERR_CLOSED_MESSAGE_PORT.
 const closedMessagePorts = new WeakSet();
 const nativeMessagePortClose = MessagePort.prototype.close;
 Object.defineProperty(MessagePort.prototype, "close", {
@@ -273,10 +264,8 @@ function makePortReadable(port) {
       stream.push(Buffer.from(chunk));
     }
   }
-  // Attach the message listener lazily on first read(). A transferred port
-  // refs the event loop while it has a message listener, so attaching eagerly
-  // would keep a worker created with { stdin: true } alive even when it never
-  // reads stdin. Buffered messages flush once the listener is added.
+  // Attach the 'message' listener lazily on first read(): a listener refs the event
+  // loop, which would keep a { stdin: true } worker alive even if stdin is never read.
   const stream = new Readable({
     read() {
       if (attached === false && ended === false) {
@@ -457,9 +446,8 @@ if (!isMainThread) {
 }
 function applyWorkerProcessOverrides() {
   const proc: any = process;
-  // node defaults debugPort to 9229 in workers (and keeps it settable). Define a
-  // per-object data property: the static debugPort accessor's setter writes a
-  // process-global, which would clobber the main thread's value cross-worker.
+  // node defaults debugPort to 9229 in workers (still settable). Per-object property:
+  // the static accessor's setter writes a process-global shared across threads.
   try {
     Object.defineProperty(proc, "debugPort", { value: 9229, writable: true, configurable: true, enumerable: true });
   } catch {}
@@ -481,9 +469,8 @@ function applyWorkerProcessOverrides() {
   if (process.platform !== "win32") {
     disabled.push("setuid", "seteuid", "setgid", "setegid", "setgroups", "initgroups");
   }
-  // node only disables the IPC surface (send/disconnect/channel/connected) in a
-  // worker that inherited an IPC channel (NODE_CHANNEL_FD set); without it they
-  // stay absent so the canonical `if (process.send)` guard keeps working.
+  // node only disables send/disconnect/channel/connected in workers that inherited an
+  // IPC channel (NODE_CHANNEL_FD); otherwise they stay absent so `if (process.send)` works.
   const hasIpc = !!process.env.NODE_CHANNEL_FD;
   if (hasIpc) {
     disabled.push("send", "disconnect");
@@ -590,12 +577,9 @@ class Worker extends EventEmitter {
           options[builtinsGeneratorHatesEval],
           "must be false when 'filename' is not a string",
         );
-      // eval: wrap the source string in a blob: URL the worker imports as its
-      // entry point. Done in JS for now; a native path could instead build the
-      // Blob and tie its lifetime to the C++ Worker's destructor. The URL must
-      // stay valid for the worker's lifetime, so it is revoked on the
-      // constructor's failure path (catch below), when the worker exits
-      // (#onClose), and via urlRevokeRegistry as a GC safety net.
+      // eval: the source becomes a blob: URL the worker imports as its entry point.
+      // The URL must outlive the worker: revoked on constructor failure (catch below),
+      // on exit (#onClose), and via urlRevokeRegistry as a GC safety net.
       const blob = new Blob([filename], { type: "" });
       this.#urlToRevoke = filename = URL.createObjectURL(blob);
     } else {
@@ -604,9 +588,8 @@ class Worker extends EventEmitter {
       filename = validateWorkerFilename(filename);
     }
 
-    // node-style captured stdio: a control MessageChannel per requested stream.
-    // Keep the parent end here; hand the worker end to the worker via workerData
-    // (transferred). The worker unwraps it and rebinds its process stdio.
+    // Captured stdio: one control MessageChannel per requested stream; the parent keeps
+    // one end, the other rides in workerData and the worker rebinds its stdio to it.
     const stdioForWorker: any = {};
     const stdioTransfer: any[] = [];
     if (options.stdin) {
@@ -615,9 +598,8 @@ class Worker extends EventEmitter {
       stdioForWorker.stdin = channel.port2;
       stdioTransfer.push(channel.port2);
     }
-    // node always makes worker.stdout/stderr Readables fed by the worker's
-    // process.stdout/stderr. When the user did not request capture, the parent
-    // auto-pipes them to its own stdout/stderr so output still surfaces.
+    // worker.stdout/stderr are always Readables fed by the worker; without capture
+    // they auto-pipe to the parent's stdio so output still surfaces.
     {
       const channel = new MessageChannel();
       this.#stdoutPort = channel.port1;
@@ -632,9 +614,8 @@ class Worker extends EventEmitter {
       stdioTransfer.push(channel.port2);
       if (!options.stderr) this.#stderrAutoPipe = true;
     }
-    // Always create a control channel so postMessageToThread can reach this worker.
-    // Wrap the user's workerData so the control port (and any stdio ports) ride
-    // along transferred; the worker unwraps it on load.
+    // Control channel for postMessageToThread; wrap workerData so the control and
+    // stdio ports ride along transferred.
     const { portToMain, portToWorker } = messaging.createMessagingChannel();
     const workerDataWrapper: any = { [BUN_WORKER_MESSAGING_KEY]: portToWorker, data: options.workerData };
     // stdout/stderr always create channels (stdin only when requested), so the
@@ -651,10 +632,8 @@ class Worker extends EventEmitter {
         : [portToWorker, ...stdioTransfer],
     };
 
-    // `env: SHARE_ENV` requests that the worker share a live environment with
-    // the parent. Convert it to a native-visible boolean flag so it doesn't hit
-    // the object-validation throw in the native Worker constructor, and so the
-    // native side skips the env snapshot and wires up the shared store.
+    // env: SHARE_ENV becomes a native boolean flag so it passes native option
+    // validation and the native side skips the env snapshot and shares the store.
     if ((options as any).env === SHARE_ENV) {
       options = { ...options, env: undefined, shareEnv: true } as NodeWorkerOptions;
     } else if ((options as any).shareEnv !== undefined) {
@@ -664,16 +643,11 @@ class Worker extends EventEmitter {
     }
     try {
       this.#worker = new WebWorker(filename, options as Bun.WorkerOptions, this);
-      // With uncaptured stdio, forward the worker's output to the parent's
-      // stdout/stderr. end:false so the worker exiting (which ends worker.stdout)
-      // does not close the parent's stream.
-      // Auto-piped (uncaptured) stdio must not independently keep the parent
-      // alive: the worker's own ref does that, and worker.unref() must let the
-      // parent exit. Forward, but unref these ports so they don't pin the loop.
+      // Uncaptured stdio forwards to the parent's stdio. Keep these ports unref'd:
+      // the worker's own ref keeps the parent alive, and unref() must still let it exit.
       if (this.#stdoutAutoPipe) {
-        // Forward via 'data' rather than pipe(): pipe() registers an error
-        // listener on the shared process.stdout per worker, so many concurrent
-        // workers trip MaxListenersExceededWarning. Never end the parent stream.
+        // 'data' instead of pipe(): pipe() adds an error listener on the shared
+        // process.stdout per worker, tripping MaxListenersExceededWarning.
         this.stdout.on("data", chunk => process.stdout.write(chunk));
         this.#stdoutPort.unref();
       }
@@ -717,9 +691,8 @@ class Worker extends EventEmitter {
 
   ref() {
     this.#worker.ref();
-    // Captured stdio ports follow the worker's ref state (a consumed
-    // worker.stdout/stderr refs the loop via its message listener). Auto-piped
-    // ports stay unref'd — the worker's own ref governs their lifetime.
+    // Captured stdio ports follow the worker's ref state; auto-piped ports stay
+    // unref'd (the worker's own ref governs them).
     if (!this.#stdoutAutoPipe) this.#stdoutPort?.ref();
     if (!this.#stderrAutoPipe) this.#stderrPort?.ref();
     this.#stdinPort?.ref();
@@ -787,10 +760,8 @@ class Worker extends EventEmitter {
     }
 
     const onExitPromise = this.#onExitPromise;
-    // Use `!== undefined`, not a truthy test: once the worker has exited
-    // #onExitPromise holds its exit code, which is 0 (falsy) for a clean exit.
-    // A truthy check would fall through and attach a 'close' listener to an
-    // already-closed worker, so the returned promise would never settle.
+    // Not a truthy test: after exit #onExitPromise is the exit code, which can be 0;
+    // falling through would wait on a 'close' event that never fires again.
     if (onExitPromise !== undefined) {
       // node: terminate() on an already-exited worker resolves with undefined;
       // an in-progress terminate (a promise) resolves with the exit code below.
@@ -901,9 +872,8 @@ class Worker extends EventEmitter {
     if (this.#stderr) {
       this.#stderr.endFromOwner();
     }
-    // Close the captured stdout/stderr control ports so an explicit worker.ref()
-    // on them (which sets m_hasRef) does not pin the parent loop after the worker
-    // exits, mirroring #stdinPort below.
+    // Close the captured stdout/stderr control ports so worker.ref() can't pin the
+    // parent loop after exit (mirrors #stdinPort below).
     this.#stdoutPort?.close();
     this.#stderrPort?.close();
     // Tear down the parent-side stdin Writable + port so post-exit writes fail
@@ -927,9 +897,8 @@ class Worker extends EventEmitter {
         error.stack = stack;
       }
     }
-    // The native loader reports a failed worker-entry resolution as
-    // 'ModuleNotFound resolving "<path>" (entry point)'; reshape it into node's
-    // "Cannot find module '<path>'" (code MODULE_NOT_FOUND).
+    // Reshape the native 'ModuleNotFound ... (entry point)' error into node's
+    // "Cannot find module '<path>'" (MODULE_NOT_FOUND).
     if (typeof error?.message === "string" && error.message.includes("(entry point)")) {
       const m = /ModuleNotFound resolving "(.+?)"/.exec(error.message);
       if (m) {
@@ -999,8 +968,7 @@ export default {
   SHARE_ENV,
   threadId,
   threadName,
-  // node:inspector's minimal NodeWorker domain reports this worker's title
-  // ("[worker N] <name>") via NodeWorker.attachedToWorker. Exposed through a
+  // Worker title for node:inspector's NodeWorker.attachedToWorker, exposed via a
   // well-known symbol so inspector.ts can read it without a public export.
   [Symbol.for("nodejs.worker_threads.inspectorTitle")]: isMainThread ? undefined : `[worker ${threadId}] ${threadName}`,
 };

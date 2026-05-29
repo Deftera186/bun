@@ -115,12 +115,10 @@ bool ScriptExecutionContext::postTaskTo(ScriptExecutionContextIdentifier identif
     if (!context)
         return false;
 
-    // A context that is permanently shutting down never drains its concurrent
-    // queue, so a task enqueued during teardown leaks the strong refs it
-    // captures (e.g. MessagePort::notifyPeerClosed posting a peerClosed task
-    // that pins the MessagePortPipe). Drop it; it can't run. We gate on the
-    // worker-teardown flag, NOT VM::hasTerminationRequest(), which node:vm's
-    // {timeout}/{breakOnSigint} set transiently on a still-running VM.
+    // A permanently-terminating context never drains its concurrent queue, so a task
+    // enqueued during teardown would leak its captured refs (e.g. notifyPeerClosed
+    // pinning the MessagePortPipe) — drop it. Gate on the worker-teardown flag, not
+    // VM::hasTerminationRequest(), which node:vm {timeout}/{breakOnSigint} sets transiently.
     if (context->isTerminating())
         return false;
 
