@@ -60,11 +60,17 @@ test.concurrent("Map keys and switch scrutinees >= 2^31 are not wrapped to int32
       // ±Infinity were all replaced with -2147483648.
       function mapRoundtrip(k) { return [...new Map([[k, 1]]).keys()][0]; }
       // switch on a double outside int32 range must not match any int32 case.
-      function bigSwitch(x) {
+      // The case set is dense (range 3) so tryTableSwitch() compiles it to
+      // op_switch_imm with a jump table — the path slow_path_switch_imm
+      // handles. A raw static_cast<int32_t> there converts 2^31 and 2^32 to
+      // INT32_MIN (cvttsd2si's sentinel), matching the first case if the
+      // range check was folded away.
+      function denseSwitch(x) {
         switch (x) {
           case -2147483648: return "int32-min";
-          case 2147483647: return "int32-max";
-          case 0: return "zero";
+          case -2147483647: return "int32-min+1";
+          case -2147483646: return "int32-min+2";
+          case -2147483645: return "int32-min+3";
           default: return "default";
         }
       }
@@ -78,11 +84,11 @@ test.concurrent("Map keys and switch scrutinees >= 2^31 are not wrapped to int32
         if (k !== Infinity) throw new Error(\`iter \${i}: Map key Infinity became \${k}\`);
         if (new Map([[2 ** 31, 1]]).has(2 ** 32)) throw new Error(\`iter \${i}: has(2^32) true for 2^31 key\`);
         if (new Map([[-(2 ** 31), 1]]).has(2 ** 31)) throw new Error(\`iter \${i}: has(2^31) true for -(2^31) key\`);
-        let s = bigSwitch(2 ** 31);
+        let s = denseSwitch(2 ** 31);
         if (s !== "default") throw new Error(\`iter \${i}: switch(2^31) matched \${s}\`);
-        s = bigSwitch(4294967296);
+        s = denseSwitch(4294967296);
         if (s !== "default") throw new Error(\`iter \${i}: switch(2^32) matched \${s}\`);
-        s = bigSwitch(-2147483648);
+        s = denseSwitch(-2147483648);
         if (s !== "int32-min") throw new Error(\`iter \${i}: switch(-2^31) matched \${s}\`);
       }
       console.log("ok");
