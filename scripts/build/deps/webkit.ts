@@ -7,7 +7,13 @@
 // -lto variants built with ThinLTO (per-module summaries for cross-language
 // importing), and the Windows ICU data table filtered + per-item zstd
 // compressed (lazily decompressed via bun_icu_decompress.cpp).
-export const WEBKIT_VERSION = "963f8758c29e965471c191668d5776a1a1b014b6";
+//
+// Currently pinned to the preview build of oven-sh/WebKit#245 (based on
+// 963f8758): fixes DFG parseIntResult() boxing parseInt results >= 2^31 as
+// sign-wrapped int32s — undefined behavior in an out-of-range double->int
+// cast that the LLVM 22 LTO backend (rust-lld) folds into a missing
+// overflow check on x86-64. Re-pin to the merged sha once #245 lands.
+export const WEBKIT_VERSION = "autobuild-preview-pr-245-88395aed";
 
 /**
  * WebKit (JavaScriptCore) — the JS engine.
@@ -68,15 +74,7 @@ function prebuiltSuffix(cfg: Config): string {
   // bun-webkit-linux-amd64-musl-baseline-lto.tar.gz
   if (cfg.baseline && cfg.x64) s += "-baseline";
   if (cfg.debug) s += "-debug";
-  // -lto variant selection is disabled: the 963f8758 -lto bitcode carries
-  // out-of-range double->int cast UB in DFG parseIntResult(), and the
-  // LLVM 22 LTO backend (rust-lld) folds the int32 overflow guard away —
-  // parseInt("80000000", 16) === -2147483648 once the caller tiers up to
-  // the DFG. Linking the non-LTO (native object) JSC keeps clang 21's
-  // correct codegen; bun's own C++/Rust modules stay LTO. Restore
-  // `else if (cfg.lto) s += "-lto"` once WEBKIT_VERSION includes
-  // oven-sh/WebKit#245 — workarounds.ts (webkit-lto-parseint-fold) trips
-  // on the next pin bump as the reminder.
+  else if (cfg.lto) s += "-lto";
   if (cfg.asan) s += "-asan";
   return s;
 }

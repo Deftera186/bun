@@ -202,24 +202,6 @@ export const workarounds: Workaround[] = [
       `musl block in emitShims() (scripts/build/shims.ts), and this entry.`,
   },
   {
-    id: "webkit-lto-parseint-fold",
-    issue: "https://github.com/oven-sh/WebKit/pull/245",
-    description:
-      "The 963f8758 -lto JSC bitcode has undefined behavior in DFG parseIntResult() — " +
-      "static_cast<int>(double) on out-of-range values — and the LLVM 22 LTO backend " +
-      '(rust-lld) folds the int32 overflow guard away: parseInt("80000000", 16) returns ' +
-      "-2147483648 on release Linux builds once the call site tiers up to the DFG. " +
-      "prebuiltSuffix() links the non-LTO (native object) JSC prebuilt instead until the " +
-      "pin includes the fix.",
-    applies: cfg => cfg.lto && cfg.webkit === "prebuilt",
-    expectedToBeFixed: cfg => cfg.webkitVersion !== "963f8758c29e965471c191668d5776a1a1b014b6",
-    cleanup:
-      `Verify the new WEBKIT_VERSION includes oven-sh/WebKit#245, restore the ` +
-      `\`else if (cfg.lto) s += "-lto"\` branch in prebuiltSuffix() (scripts/build/deps/webkit.ts, ` +
-      `after the -debug branch), and delete this entry. ` +
-      `test/js/bun/jsc/parseint-jit-int32-overflow.test.ts guards the behavior either way.`,
-  },
-  {
     id: "android-posix-spawn-setsid-const",
     issue: "https://github.com/rust-lang/libc/pull/5104",
     description:
