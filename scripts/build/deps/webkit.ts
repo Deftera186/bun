@@ -68,7 +68,15 @@ function prebuiltSuffix(cfg: Config): string {
   // bun-webkit-linux-amd64-musl-baseline-lto.tar.gz
   if (cfg.baseline && cfg.x64) s += "-baseline";
   if (cfg.debug) s += "-debug";
-  else if (cfg.lto) s += "-lto";
+  // -lto variant selection is disabled: the 963f8758 -lto bitcode carries
+  // out-of-range double->int cast UB in DFG parseIntResult(), and the
+  // LLVM 22 LTO backend (rust-lld) folds the int32 overflow guard away —
+  // parseInt("80000000", 16) === -2147483648 once the caller tiers up to
+  // the DFG. Linking the non-LTO (native object) JSC keeps clang 21's
+  // correct codegen; bun's own C++/Rust modules stay LTO. Restore
+  // `else if (cfg.lto) s += "-lto"` once WEBKIT_VERSION includes
+  // oven-sh/WebKit#245 — workarounds.ts (webkit-lto-parseint-fold) trips
+  // on the next pin bump as the reminder.
   if (cfg.asan) s += "-asan";
   return s;
 }
@@ -254,7 +262,15 @@ export const webkit: Dependency = {
     // PIE-default distros — without it the driver still passes -pie and the
     // -fno-pic probe object fails R_X86_64_32S relocation, killing FindThreads.
     if (cfg.unix && cfg.abi !== "android") optFlags.push("-fno-pic", "-fno-pie", "-no-pie");
-    if (cfg.lto) optFlags.push("-flto=thin");
+    // Match the flags oven-sh/WebKit's artifact builders use for the -lto
+    // prebuilts (Dockerfile ARG LTO_FLAG on Linux) — the final bun link uses
+    // -fwhole-program-vtables, which requires every bitcode module to have
+    // been compiled with -fsplit-lto-unit (implied by -fwhole-program-vtables)
+    // or the link fails with "inconsistent LTO Unit splitting".
+    if (cfg.lto) {
+      if (cfg.linux) optFlags.push("-flto=full", "-fwhole-program-vtables", "-fforce-emit-vtables");
+      else optFlags.push("-flto=thin");
+    }
     if (cfg.pgoGenerate) optFlags.push(`-fprofile-generate=${cfg.pgoGenerate}`);
     if (cfg.pgoUse) {
       optFlags.push(
