@@ -15,7 +15,7 @@ import { bunEnv, bunExe } from "harness";
 //
 // Only LTO release builds can exhibit the fold (debug/asan builds pass by
 // construction); CI's release lanes exercise it. See oven-sh/WebKit#245.
-test("parseInt keeps values >= 2^31 exact after JIT warmup", async () => {
+test.concurrent("parseInt keeps values >= 2^31 exact after JIT warmup", async () => {
   await using proc = Bun.spawn({
     cmd: [
       bunExe(),
@@ -50,7 +50,7 @@ test("parseInt keeps values >= 2^31 exact after JIT warmup", async () => {
 // the Map variant against an older canary): Map key normalization and
 // switch-immediate dispatch both compare a truncated double against the
 // original value to decide the int32 fast path.
-test("Map keys and switch scrutinees >= 2^31 are not wrapped to int32", async () => {
+test.concurrent("Map keys and switch scrutinees >= 2^31 are not wrapped to int32", async () => {
   await using proc = Bun.spawn({
     cmd: [
       bunExe(),
