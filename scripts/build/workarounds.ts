@@ -206,7 +206,7 @@ export const workarounds: Workaround[] = [
     issue: "https://github.com/oven-sh/WebKit/pull/245",
     description:
       "The 963f8758 -lto JSC bitcode has undefined behavior in DFG parseIntResult() — " +
-      'static_cast<int>(double) on out-of-range values — and the LLVM 22 LTO backend ' +
+      "static_cast<int>(double) on out-of-range values — and the LLVM 22 LTO backend " +
       '(rust-lld) folds the int32 overflow guard away: parseInt("80000000", 16) returns ' +
       "-2147483648 on release Linux builds once the call site tiers up to the DFG. " +
       "prebuiltSuffix() links the non-LTO (native object) JSC prebuilt instead until the " +
