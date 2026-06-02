@@ -265,9 +265,11 @@ export const webkit: Dependency = {
     // prebuilts (Dockerfile ARG LTO_FLAG on Linux) — the final bun link uses
     // -fwhole-program-vtables, which requires every bitcode module to have
     // been compiled with -fsplit-lto-unit (implied by -fwhole-program-vtables)
-    // or the link fails with "inconsistent LTO Unit splitting".
+    // or the link fails with "inconsistent LTO Unit splitting". The gate
+    // mirrors the link-side predicate in flags.ts (unix && !darwin), which
+    // includes FreeBSD.
     if (cfg.lto) {
-      if (cfg.linux) optFlags.push("-flto=full", "-fwhole-program-vtables", "-fforce-emit-vtables");
+      if (cfg.unix && !cfg.darwin) optFlags.push("-flto=full", "-fwhole-program-vtables", "-fforce-emit-vtables");
       else optFlags.push("-flto=thin");
     }
     if (cfg.pgoGenerate) optFlags.push(`-fprofile-generate=${cfg.pgoGenerate}`);

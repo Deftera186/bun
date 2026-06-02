@@ -68,10 +68,10 @@ test("Map keys and switch scrutinees >= 2^31 are not wrapped to int32", async ()
           default: return "default";
         }
       }
-      // 20k iterations: tier-up with this jitPolicyScale happens within the
+      // 5k iterations: tier-up with this jitPolicyScale happens within the
       // first few hundred calls; kept low because Map allocations are slow
-      // on debug/ASAN builds.
-      for (let i = 0; i < 20_000; i++) {
+      // on debug/ASAN builds and the default per-test timeout applies.
+      for (let i = 0; i < 5_000; i++) {
         let k = mapRoundtrip(2 ** 31);
         if (k !== 2 ** 31) throw new Error(\`iter \${i}: Map key 2^31 became \${k}\`);
         k = mapRoundtrip(Infinity);
@@ -96,4 +96,4 @@ test("Map keys and switch scrutinees >= 2^31 are not wrapped to int32", async ()
   expect(stderr).toBe("");
   expect(stdout).toBe("ok\n");
   expect(exitCode).toBe(0);
-}, 30_000);
+});
