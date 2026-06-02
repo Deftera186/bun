@@ -9,11 +9,12 @@
 // compressed (lazily decompressed via bun_icu_decompress.cpp).
 //
 // Currently pinned to the preview build of oven-sh/WebKit#245 (based on
-// 963f8758): fixes DFG parseIntResult() boxing parseInt results >= 2^31 as
-// sign-wrapped int32s — undefined behavior in an out-of-range double->int
-// cast that the LLVM 22 LTO backend (rust-lld) folds into a missing
-// overflow check on x86-64. Re-pin to the merged sha once #245 lands.
-export const WEBKIT_VERSION = "autobuild-preview-pr-245-88395aed";
+// 963f8758): fixes DFG parseIntResult() and LLInt slow_path_switch_imm
+// boxing/matching values >= 2^31 as sign-wrapped int32s — undefined
+// behavior in out-of-range double->int casts that the LLVM 22 LTO backend
+// (rust-lld) folds into missing overflow checks on x86-64. Re-pin to the
+// merged sha once #245 lands.
+export const WEBKIT_VERSION = "autobuild-preview-pr-245-29422029";
 
 /**
  * WebKit (JavaScriptCore) — the JS engine.

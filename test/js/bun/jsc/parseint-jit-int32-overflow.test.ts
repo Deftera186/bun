@@ -45,3 +45,55 @@ test("parseInt keeps values >= 2^31 exact after JIT warmup", async () => {
   expect(stdout).toBe("ok\n");
   expect(exitCode).toBe(0);
 });
+
+// Same undefined-behavior class, sibling call sites (issue #31080 reported
+// the Map variant against an older canary): Map key normalization and
+// switch-immediate dispatch both compare a truncated double against the
+// original value to decide the int32 fast path.
+test("Map keys and switch scrutinees >= 2^31 are not wrapped to int32", async () => {
+  await using proc = Bun.spawn({
+    cmd: [
+      bunExe(),
+      "-e",
+      `
+      // Map key normalization (issue #31080): keys outside int32 range and
+      // ±Infinity were all replaced with -2147483648.
+      function mapRoundtrip(k) { return [...new Map([[k, 1]]).keys()][0]; }
+      // switch on a double outside int32 range must not match any int32 case.
+      function bigSwitch(x) {
+        switch (x) {
+          case -2147483648: return "int32-min";
+          case 2147483647: return "int32-max";
+          case 0: return "zero";
+          default: return "default";
+        }
+      }
+      // 20k iterations: tier-up with this jitPolicyScale happens within the
+      // first few hundred calls; kept low because Map allocations are slow
+      // on debug/ASAN builds.
+      for (let i = 0; i < 20_000; i++) {
+        let k = mapRoundtrip(2 ** 31);
+        if (k !== 2 ** 31) throw new Error(\`iter \${i}: Map key 2^31 became \${k}\`);
+        k = mapRoundtrip(Infinity);
+        if (k !== Infinity) throw new Error(\`iter \${i}: Map key Infinity became \${k}\`);
+        if (new Map([[2 ** 31, 1]]).has(2 ** 32)) throw new Error(\`iter \${i}: has(2^32) true for 2^31 key\`);
+        if (new Map([[-(2 ** 31), 1]]).has(2 ** 31)) throw new Error(\`iter \${i}: has(2^31) true for -(2^31) key\`);
+        let s = bigSwitch(2 ** 31);
+        if (s !== "default") throw new Error(\`iter \${i}: switch(2^31) matched \${s}\`);
+        s = bigSwitch(4294967296);
+        if (s !== "default") throw new Error(\`iter \${i}: switch(2^32) matched \${s}\`);
+        s = bigSwitch(-2147483648);
+        if (s !== "int32-min") throw new Error(\`iter \${i}: switch(-2^31) matched \${s}\`);
+      }
+      console.log("ok");
+      `,
+    ],
+    env: { ...bunEnv, BUN_JSC_jitPolicyScale: "0.001" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect(stderr).toBe("");
+  expect(stdout).toBe("ok\n");
+  expect(exitCode).toBe(0);
+}, 30_000);
