@@ -314,7 +314,8 @@ impl Watcher {
         match std::thread::Builder::new()
             .name("FileWatcher".into())
             .spawn(move || unsafe {
-                // TODO(port): narrow error set
+                // thread_main handles its own errors (on_error + frees the Box);
+                // there's no thread to propagate its Result to, so discard it.
                 let _ = Watcher::thread_main(this_addr as *mut Watcher);
             }) {
             Ok(handle) => {
